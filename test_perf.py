@@ -2,6 +2,7 @@ import io
 import json
 import time
 import hashlib
+import pathlib
 import unittest
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
@@ -66,7 +67,7 @@ sys.modules['streamlit'] = st_mock
 import importlib
 import plotly.express as _px
 
-spec = importlib.util.spec_from_file_location("viz", r"C:\Users\vktr\Desktop\streamlit\viz.py")
+spec = importlib.util.spec_from_file_location("viz", pathlib.Path(__file__).parent / "viz.py")
 viz = importlib.util.module_from_spec(spec)
 try:
     spec.loader.exec_module(viz)
@@ -120,9 +121,10 @@ def firestore_response(n_docs):
 
 class TestCSVLoad(unittest.TestCase):
 
-    def _load_csv(self, df):
+    def _load_csv(self, df, sep=','):
         buf = df_to_csv_bytes(df)
-        loaded = pd.read_csv(buf)
+        raw = buf.read().decode('utf-8')
+        loaded = viz.load_csv_df(raw, sep)
         hashlib.md5(pd.util.hash_pandas_object(loaded, index=True).values).hexdigest()
         return loaded
 
@@ -161,6 +163,65 @@ class TestCSVLoad(unittest.TestCase):
         with timed("CSV load 2.5M rows", 15.0):
             r = self._load_csv(df)
         self.assertEqual(len(r), 2_500_000)
+
+
+def make_json(n_rows, orient, n_cat=10):
+    """Return a JSON string and expected row count for the given orient."""
+    df = make_df(n_rows, n_cat)
+    return df.to_json(orient=orient), len(df)
+
+
+class TestJSONLoad(unittest.TestCase):
+    """
+    Performance benchmarks for viz.load_json_df.
+    Three orientations are exercised:
+      - records  (list of row-dicts, most common upload format)
+      - auto     (sniffs list → json_normalize; dict → pd.DataFrame)
+      - columns  ({col: {idx: val}})
+      - split    ({index, columns, data} — compact pandas export)
+    Limits are ~2-3x the CSV limits because JSON carries more
+    per-character parsing overhead than CSV.
+    """
+
+    def _run(self, n_rows, orient, make_orient, limit_s):
+        raw, expected = make_json(n_rows, make_orient)
+        label = f"JSON/{orient:<8} {n_rows:>9,} rows"
+        with timed(label, limit_s):
+            df = viz.load_json_df(raw, orient)
+            hashlib.md5(pd.util.hash_pandas_object(df, index=True).values).hexdigest()
+        self.assertEqual(len(df), expected)
+        self.assertFalse(df.empty)
+
+    # records ----------------------------------------------------------------
+    def test_records_1k(self):    self._run(1_000,     "records", "records", 0.1)
+    def test_records_50k(self):   self._run(50_000,    "records", "records", 0.8)
+    def test_records_250k(self):  self._run(250_000,   "records", "records", 4.0)
+    def test_records_500k(self):  self._run(500_000,   "records", "records", 8.0)
+    def test_records_1m(self):    self._run(1_000_000, "records", "records", 16.0)
+
+    # auto — list input → json_normalize path --------------------------------
+    def test_auto_list_1k(self):   self._run(1_000,     "auto", "records", 0.1)
+    def test_auto_list_50k(self):  self._run(50_000,    "auto", "records", 0.8)
+    def test_auto_list_250k(self): self._run(250_000,   "auto", "records", 4.0)
+    def test_auto_list_500k(self): self._run(500_000,   "auto", "records", 8.0)
+    def test_auto_list_1m(self):   self._run(1_000_000, "auto", "records", 16.0)
+
+    # auto — dict input → pd.DataFrame path ---------------------------------
+    def test_auto_dict_1k(self):   self._run(1_000,   "auto", "columns", 0.1)
+    def test_auto_dict_50k(self):  self._run(50_000,  "auto", "columns", 1.0)
+    def test_auto_dict_250k(self): self._run(250_000, "auto", "columns", 5.0)
+
+    # columns ----------------------------------------------------------------
+    def test_columns_1k(self):    self._run(1_000,   "columns", "columns", 0.1)
+    def test_columns_50k(self):   self._run(50_000,  "columns", "columns", 1.0)
+    def test_columns_250k(self):  self._run(250_000, "columns", "columns", 5.0)
+    def test_columns_500k(self):  self._run(500_000, "columns", "columns", 10.0)
+
+    # split ------------------------------------------------------------------
+    def test_split_1k(self):    self._run(1_000,   "split", "split", 0.1)
+    def test_split_50k(self):   self._run(50_000,  "split", "split", 0.8)
+    def test_split_250k(self):  self._run(250_000, "split", "split", 4.0)
+    def test_split_500k(self):  self._run(500_000, "split", "split", 8.0)
 
 
 class TestChartRender(unittest.TestCase):
