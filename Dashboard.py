@@ -1987,7 +1987,7 @@ elif st.session_state.screen == 'config':
                             if _new_ct in CHART_TYPES:
                                 sel_viz['chart_type'] = _new_ct
 
-                                st.session_state[f"sp_ct_{aid}_{vid}"] = _new_ct
+                                st.session_state.pop(f"sp_ct_{aid}_{vid}", None)
 
                         st.selectbox("Chart type", CHART_TYPES,
                                      index=CHART_TYPES.index(sel_viz['chart_type']) if sel_viz['chart_type'] in CHART_TYPES else 0,
